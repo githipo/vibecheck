@@ -107,3 +107,66 @@ class FocusArea(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+# ---------------------------------------------------------------------------
+# Multi-Repo Awareness models
+# ---------------------------------------------------------------------------
+
+
+class RepoGroup(Base):
+    __tablename__ = "repo_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    repos: Mapped[list["Repo"]] = relationship(
+        "Repo", back_populates="group", cascade="all, delete-orphan"
+    )
+    connections: Mapped[list["RepoConnection"]] = relationship(
+        "RepoConnection",
+        foreign_keys="RepoConnection.group_id",
+        cascade="all, delete-orphan",
+    )
+
+
+class Repo(Base):
+    __tablename__ = "repos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("repo_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    role: Mapped[str] = mapped_column(String(200), nullable=False, default="other")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    group: Mapped["RepoGroup"] = relationship("RepoGroup", back_populates="repos")
+
+
+class RepoConnection(Base):
+    __tablename__ = "repo_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("repo_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    from_repo_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("repos.id", ondelete="CASCADE"), nullable=False
+    )
+    to_repo_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("repos.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    evidence: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )

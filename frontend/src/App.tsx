@@ -7,6 +7,8 @@ import Results from './pages/Results'
 import Insights from './pages/Insights'
 import Analytics from './pages/Analytics'
 import CodebaseMap from './pages/CodebaseMap'
+import SelfBrief from './pages/SelfBrief'
+import MultiRepo from './pages/MultiRepo'
 
 const App = () => {
   return (
@@ -20,6 +22,8 @@ const App = () => {
         <Route path="/sessions/:id/insights" element={<Insights />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/codebase" element={<CodebaseMap />} />
+        <Route path="/codebase/brief" element={<SelfBrief />} />
+        <Route path="/repos" element={<MultiRepo />} />
       </Routes>
     </div>
   )

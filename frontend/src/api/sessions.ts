@@ -290,3 +290,148 @@ export const startCodeQuiz = async (filePath: string, title?: string): Promise<S
   })
   return handleResponse<Session>(res)
 }
+
+// AI Self-Brief types and API calls
+
+export interface KeyEntryPoint {
+  file: string
+  role: string
+}
+
+export interface AIBrief {
+  architecture_summary: string
+  non_obvious_conventions: string[]
+  critical_invariants: string[]
+  common_mistakes_to_avoid: string[]
+  key_entry_points: KeyEntryPoint[]
+}
+
+export interface SuggestedAgent {
+  name: string
+  role: string
+  description: string
+  system_prompt: string
+  claude_md_entry: string
+}
+
+export interface SelfBriefResult {
+  directory: string
+  brief: AIBrief
+  suggested_agents: SuggestedAgent[]
+  generated_at: string
+}
+
+export const generateSelfBrief = async (directory: string): Promise<SelfBriefResult> => {
+  const res = await fetch('/api/codebase/brief', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ directory }),
+  })
+  return handleResponse<SelfBriefResult>(res)
+}
+
+export const applySelfBrief = async (
+  filePath: string,
+  brief: AIBrief,
+  suggestedAgents: SuggestedAgent[],
+  includeAgents: boolean
+): Promise<{ applied: boolean; file_path: string; chars_added: number }> => {
+  const res = await fetch('/api/codebase/brief/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      file_path: filePath,
+      brief,
+      suggested_agents: suggestedAgents,
+      include_agents: includeAgents,
+    }),
+  })
+  return handleResponse<{ applied: boolean; file_path: string; chars_added: number }>(res)
+}
+
+// Multi-Repo types and API calls
+
+export interface RepoIn {
+  name: string
+  path: string
+  role: string
+}
+
+export interface RepoOut {
+  id: number
+  group_id: number
+  name: string
+  path: string
+  role: string
+  created_at: string
+}
+
+export interface RepoConnectionOut {
+  id: number
+  from_repo_id: number
+  to_repo_id: number
+  connection_type: string
+  description: string
+  evidence: string
+  created_at: string
+}
+
+export interface RepoGroupOut {
+  id: number
+  name: string
+  description: string
+  created_at: string
+  repos: RepoOut[]
+}
+
+export interface RepoGroupDetail extends RepoGroupOut {
+  connections: RepoConnectionOut[]
+}
+
+export interface RepoContextOut {
+  group_name: string
+  summary: string
+  connections: RepoConnectionOut[]
+  repo_briefs: Record<string, string>
+}
+
+export const listRepoGroups = async (): Promise<RepoGroupOut[]> => {
+  const res = await fetch('/api/repos/groups')
+  return handleResponse<RepoGroupOut[]>(res)
+}
+
+export const createRepoGroup = async (
+  name: string,
+  description: string,
+  repos: RepoIn[]
+): Promise<RepoGroupOut> => {
+  const res = await fetch('/api/repos/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description, repos }),
+  })
+  return handleResponse<RepoGroupOut>(res)
+}
+
+export const getRepoGroup = async (id: number): Promise<RepoGroupDetail> => {
+  const res = await fetch(`/api/repos/groups/${id}`)
+  return handleResponse<RepoGroupDetail>(res)
+}
+
+export const deleteRepoGroup = async (id: number): Promise<void> => {
+  const res = await fetch(`/api/repos/groups/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`HTTP ${res.status}: ${text}`)
+  }
+}
+
+export const analyzeRepoGroup = async (id: number): Promise<RepoContextOut> => {
+  const res = await fetch(`/api/repos/groups/${id}/analyze`, { method: 'POST' })
+  return handleResponse<RepoContextOut>(res)
+}
+
+export const getRepoContext = async (id: number): Promise<RepoContextOut> => {
+  const res = await fetch(`/api/repos/groups/${id}/context`)
+  return handleResponse<RepoContextOut>(res)
+}

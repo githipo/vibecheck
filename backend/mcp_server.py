@@ -417,5 +417,200 @@ async def vibecheck_code_quiz(file_path: str) -> str:
         return f"An unexpected error occurred while generating code quiz for '{file_path}': {exc}"
 
 
+@mcp.tool()
+async def vibecheck_self_brief(directory: str) -> str:
+    """Generate an AI onboarding brief for a codebase directory. Analyzes the most complex files and produces: architecture summary, non-obvious conventions, critical invariants, common AI mistakes to avoid, and suggested custom sub-agents with pre-written system prompts. Apply the result to your CLAUDE.md to make future sessions smarter."""
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                f"{BASE_URL}/api/codebase/brief",
+                json={"directory": directory},
+            )
+            resp.raise_for_status()
+            data: dict = resp.json()
+
+        brief: dict = data.get("brief", {})
+        suggested_agents: list[dict] = data.get("suggested_agents", [])
+
+        architecture_summary: str = brief.get("architecture_summary", "")
+        non_obvious_conventions: list[str] = brief.get("non_obvious_conventions", [])
+        critical_invariants: list[str] = brief.get("critical_invariants", [])
+        common_mistakes: list[str] = brief.get("common_mistakes_to_avoid", [])
+        key_entry_points: list[dict] = brief.get("key_entry_points", [])
+
+        lines = [
+            f"AI ONBOARDING BRIEF — {directory}",
+            "",
+            "ARCHITECTURE",
+            architecture_summary,
+            "",
+            "NON-OBVIOUS CONVENTIONS",
+        ]
+        for convention in non_obvious_conventions:
+            lines.append(f"• {convention}")
+
+        lines.append("")
+        lines.append("CRITICAL INVARIANTS")
+        for invariant in critical_invariants:
+            lines.append(f"• {invariant}")
+
+        lines.append("")
+        lines.append("COMMON AI MISTAKES TO AVOID")
+        for mistake in common_mistakes:
+            lines.append(f"✗ {mistake}")
+
+        lines.append("")
+        lines.append("KEY ENTRY POINTS")
+        for entry in key_entry_points:
+            lines.append(f"→ {entry.get('file', '')}: {entry.get('role', '')}")
+
+        lines.append("")
+        lines.append(f"SUGGESTED SUB-AGENTS ({len(suggested_agents)} agents)")
+        for agent in suggested_agents:
+            lines.append(f"[{agent.get('name', '')}] {agent.get('role', '')}")
+            lines.append(f"  {agent.get('description', '')}")
+
+        lines.append("")
+        lines.append("To apply this brief + sub-agents to your CLAUDE.md:")
+        lines.append("http://localhost:5173/codebase/brief")
+        lines.append("")
+        lines.append('Or paste your CLAUDE.md path and call vibecheck_apply_brief("/path/to/CLAUDE.md")')
+
+        return "\n".join(lines)
+    except httpx.HTTPError as exc:
+        logger.error("HTTP error during vibecheck_self_brief for %s: %s", directory, exc)
+        return f"Could not reach the VibeCheck API. Is the backend running at {BASE_URL}? (Error: {exc})"
+    except Exception as exc:
+        logger.error("Unexpected error during vibecheck_self_brief for %s: %s", directory, exc)
+        return f"An unexpected error occurred while generating self-brief for '{directory}': {exc}"
+
+
+@mcp.tool()
+async def vibecheck_apply_brief(claude_md_path: str, directory: str) -> str:
+    """Apply a generated AI brief and sub-agent definitions to a CLAUDE.md file. Generates the brief from directory and appends it to the specified CLAUDE.md."""
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            brief_resp = await client.post(
+                f"{BASE_URL}/api/codebase/brief",
+                json={"directory": directory},
+            )
+            brief_resp.raise_for_status()
+            brief_data: dict = brief_resp.json()
+
+            apply_resp = await client.post(
+                f"{BASE_URL}/api/codebase/brief/apply",
+                json={
+                    "file_path": claude_md_path,
+                    "brief": brief_data["brief"],
+                    "suggested_agents": brief_data.get("suggested_agents", []),
+                    "include_agents": True,
+                },
+            )
+            apply_resp.raise_for_status()
+            result: dict = apply_resp.json()
+
+        chars_added: int = result.get("chars_added", 0)
+        return (
+            f"AI onboarding brief applied to {claude_md_path}\n"
+            f"{chars_added} characters added.\n\n"
+            f"The brief includes:\n"
+            f"• Architecture summary\n"
+            f"• Non-obvious conventions\n"
+            f"• Critical invariants\n"
+            f"• Common AI mistakes to avoid\n"
+            f"• Key entry points\n"
+            f"• {len(brief_data.get('suggested_agents', []))} suggested sub-agents\n\n"
+            f"Your CLAUDE.md is now ready for future AI sessions."
+        )
+    except httpx.HTTPError as exc:
+        logger.error(
+            "HTTP error during vibecheck_apply_brief for %s: %s", claude_md_path, exc
+        )
+        return f"Could not reach the VibeCheck API. Is the backend running at {BASE_URL}? (Error: {exc})"
+    except Exception as exc:
+        logger.error(
+            "Unexpected error during vibecheck_apply_brief for %s: %s", claude_md_path, exc
+        )
+        return f"An unexpected error occurred while applying brief to '{claude_md_path}': {exc}"
+
+
+@mcp.tool()
+async def vibecheck_repo_context(group_name: str) -> str:
+    """Get cross-repo relationship context for a multi-repo group. Surfaces how repos connect (API calls, shared types, package deps) so you can understand the full system when working in one repo. Run vibecheck_repo_context("my-system") to see all connections."""
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            # 1. List all groups and find the one matching group_name
+            list_resp = await client.get(f"{BASE_URL}/api/repos/groups")
+            list_resp.raise_for_status()
+            groups: list[dict] = list_resp.json()
+
+            matched: dict | None = None
+            for g in groups:
+                if g.get("name", "").lower() == group_name.lower():
+                    matched = g
+                    break
+
+            if matched is None:
+                known = ", ".join(f'"{g["name"]}"' for g in groups) or "none"
+                return (
+                    f"No repo group named \"{group_name}\" found.\n"
+                    f"Known groups: {known}\n\n"
+                    f"Create one via POST /api/repos/groups or the VibeCheck UI."
+                )
+
+            group_id: int = matched["id"]
+
+            # 2. Trigger AI analysis (this may take a while)
+            analyze_resp = await client.post(
+                f"{BASE_URL}/api/repos/groups/{group_id}/analyze"
+            )
+            analyze_resp.raise_for_status()
+
+            # 3. Fetch context
+            ctx_resp = await client.get(
+                f"{BASE_URL}/api/repos/groups/{group_id}/context"
+            )
+            ctx_resp.raise_for_status()
+            ctx: dict = ctx_resp.json()
+
+        group_name_out: str = ctx.get("group_name", group_name)
+        summary: str = ctx.get("summary", "")
+        connections: list[dict] = ctx.get("connections", [])
+        repo_briefs: dict[str, str] = ctx.get("repo_briefs", {})
+
+        lines = [
+            f"MULTI-REPO CONTEXT — {group_name_out}",
+            "",
+            "SUMMARY",
+            summary,
+            "",
+        ]
+
+        if repo_briefs:
+            lines.append("REPOS")
+            for name, brief in repo_briefs.items():
+                lines.append(f"  {name}: {brief}")
+            lines.append("")
+
+        if connections:
+            lines.append(f"CROSS-REPO CONNECTIONS ({len(connections)} found)")
+            for conn in connections:
+                conn_type = conn.get("connection_type", "unknown")
+                description = conn.get("description", "")
+                evidence = conn.get("evidence", "")
+                evidence_str = f" [{evidence}]" if evidence else ""
+                lines.append(f"  [{conn_type}] {description}{evidence_str}")
+        else:
+            lines.append("No cross-repo connections detected.")
+
+        return "\n".join(lines)
+    except httpx.HTTPError as exc:
+        logger.error("HTTP error during vibecheck_repo_context for %r: %s", group_name, exc)
+        return f"Could not reach the VibeCheck API. Is the backend running at {BASE_URL}? (Error: {exc})"
+    except Exception as exc:
+        logger.error("Unexpected error during vibecheck_repo_context for %r: %s", group_name, exc)
+        return f"An unexpected error occurred while fetching repo context for '{group_name}': {exc}"
+
+
 if __name__ == "__main__":
     mcp.run()

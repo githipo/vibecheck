@@ -207,3 +207,104 @@ class FocusAreaCreate(BaseModel):
 class CodeQuizRequest(BaseModel):
     file_path: str               # absolute path to code file
     title: str | None = None     # optional override; defaults to filename
+
+
+# ---------------------------------------------------------------------------
+# AI Self-Brief schemas
+# ---------------------------------------------------------------------------
+
+
+class KeyEntryPoint(BaseModel):
+    file: str
+    role: str  # e.g. "FastAPI app entrypoint", "Main DB session factory"
+
+
+class AIBrief(BaseModel):
+    architecture_summary: str
+    non_obvious_conventions: list[str]
+    critical_invariants: list[str]
+    common_mistakes_to_avoid: list[str]
+    key_entry_points: list[KeyEntryPoint]
+
+
+class SuggestedAgent(BaseModel):
+    name: str           # e.g. "db-agent"
+    role: str           # e.g. "Database & schema specialist"
+    description: str
+    system_prompt: str  # Full system prompt, ready to use
+    claude_md_entry: str  # Ready-to-paste CLAUDE.md block
+
+
+class SelfBriefOut(BaseModel):
+    directory: str
+    brief: AIBrief
+    suggested_agents: list[SuggestedAgent]
+    generated_at: str   # ISO datetime string
+
+
+class ApplySelfBriefRequest(BaseModel):
+    file_path: str
+    brief: AIBrief
+    suggested_agents: list[SuggestedAgent]
+    include_agents: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Multi-Repo Awareness schemas
+# ---------------------------------------------------------------------------
+
+
+class RepoIn(BaseModel):
+    name: str
+    path: str
+    role: str = "other"
+
+
+class RepoGroupCreate(BaseModel):
+    name: str
+    description: str = ""
+    repos: list[RepoIn]
+
+
+class RepoOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    group_id: int
+    name: str
+    path: str
+    role: str
+    created_at: datetime
+
+
+class RepoConnectionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    from_repo_id: int
+    to_repo_id: int
+    connection_type: str
+    description: str
+    evidence: str
+    created_at: datetime
+
+
+class RepoGroupOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str
+    created_at: datetime
+    repos: list[RepoOut]
+
+
+class RepoGroupDetail(RepoGroupOut):
+    connections: list[RepoConnectionOut]
+
+
+class RepoContextOut(BaseModel):
+    group_name: str
+    summary: str          # AI-generated paragraph on how repos connect
+    connections: list[RepoConnectionOut]
+    repo_briefs: dict[str, str]   # repo name -> one-sentence role description

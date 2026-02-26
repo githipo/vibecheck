@@ -99,4 +99,5 @@ The MCP server (`backend/mcp_server.py`) only makes HTTP calls to the local Fast
 - No git integration — codebase scanner doesn't know which files Claude touched vs. which were pre-existing
 - Analytics topic classification not cached — will slow down with scale
 - No way to retake a quiz and compare scores over time for the same session
-- README doesn't reflect the 3 features added after initial build (Session Intelligence, Analytics, Codebase Map)
+- No way to retake a quiz and compare scores over time for the same session (retake works but scores aren't diff'd)
+- Codebase scan results not persisted — no historical risk trend across scans

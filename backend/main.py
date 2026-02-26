@@ -57,16 +57,18 @@ from routers.results import router as results_router  # noqa: E402
 from routers.insights import router as insights_router  # noqa: E402
 from routers.analytics import router as analytics_router  # noqa: E402
 from routers.codebase import router as codebase_router  # noqa: E402
+from routers.multi_repo import router as multi_repo_router  # noqa: E402
 
 app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
 
-# Quiz, results, insights, analytics, and codebase routers handle their own full paths
-# so they are mounted at /api with no additional prefix.
+# Quiz, results, insights, analytics, codebase, and multi_repo routers handle
+# their own full paths so they are mounted at /api with no additional prefix.
 app.include_router(quiz_router, prefix="/api", tags=["quiz"])
 app.include_router(results_router, prefix="/api", tags=["results"])
 app.include_router(insights_router, prefix="/api", tags=["insights"])
 app.include_router(analytics_router, prefix="/api", tags=["analytics"])
 app.include_router(codebase_router, prefix="/api", tags=["codebase"])
+app.include_router(multi_repo_router, prefix="/api", tags=["multi-repo"])
 
 
 @app.get("/health", tags=["health"])

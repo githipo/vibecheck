@@ -64,6 +64,18 @@ const Home = () => {
             Codebase Map
           </Link>
           <Link
+            to="/codebase/brief"
+            className="inline-flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 font-medium px-4 py-2 rounded-lg transition-colors text-sm"
+          >
+            AI Brief
+          </Link>
+          <Link
+            to="/repos"
+            className="inline-flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 font-medium px-4 py-2 rounded-lg transition-colors text-sm"
+          >
+            Multi-Repo
+          </Link>
+          <Link
             to="/sessions/new"
             className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-lg transition-colors text-sm"
           >
