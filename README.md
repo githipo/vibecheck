@@ -14,6 +14,8 @@ A learning-verification companion for AI-assisted development. VibeCheck watches
 | **Codebase Scanner** | Points at any directory → AI ranks files by comprehension risk → quiz yourself on any file directly |
 | **Focus Areas** | Pin files or concepts you care about most — highlighted in every scan |
 | **Code-First Quizzing** | Generate a quiz from a source file with no transcript needed |
+| **AI Self-Brief** | Points Claude at your codebase → AI reads the riskiest files → generates a CLAUDE.md-ready onboarding brief with architecture notes, conventions, invariants, and suggested sub-agents |
+| **Multi-Repo Analysis** | Group multiple repos → AI maps cross-repo connections (API calls, shared types, package deps) → surfaces context for working across a system |
 
 All features are available in the browser and via **MCP tools** directly inside Claude Code.
 
@@ -35,7 +37,7 @@ All features are available in the browser and via **MCP tools** directly inside 
 
 ```bash
 git clone <repo-url>
-cd vibecoding
+cd vibecheck
 ```
 
 ### 2. Create `.env`
@@ -87,10 +89,10 @@ The MCP server makes VibeCheck available as tools inside every Claude Code sessi
 
 **Register it once:**
 ```bash
-claude mcp add vibecheck -s user -- uv --project /path/to/vibecoding/backend run python /path/to/vibecoding/backend/mcp_server.py
+claude mcp add vibecheck -s user -- uv --project /path/to/vibecheck/backend run python /path/to/vibecheck/backend/mcp_server.py
 ```
 
-Replace `/path/to/vibecoding` with your actual path. `-s user` makes it available in every project, not just this one.
+Replace `/path/to/vibecheck` with your actual path. `-s user` makes it available in every project, not just this one.
 
 Restart Claude Code after registering.
 
@@ -106,6 +108,9 @@ Restart Claude Code after registering.
 | `vibecheck_catchup` | Generate a personalized explanation for a weak topic, using your actual wrong answers and session transcripts as context. |
 | `vibecheck_scan` | Scan a directory and rank files by comprehension risk. |
 | `vibecheck_code_quiz` | Generate a quiz from a source file directly — no transcript needed. |
+| `vibecheck_self_brief` | Scan a directory → AI reads the highest-risk files → returns an onboarding brief (architecture, conventions, invariants, mistakes to avoid) plus 3–5 suggested sub-agents with ready-to-paste CLAUDE.md blocks. |
+| `vibecheck_apply_brief` | Same as `vibecheck_self_brief` but appends the full brief directly to a specified CLAUDE.md file. |
+| `vibecheck_repo_context` | Given a named repo group, return cross-repo connection context — which repos call each other, share types, or depend on each other. |
 
 **Example Claude Code conversations:**
 
@@ -127,6 +132,20 @@ You: Scan my backend for risky files
 Claude: [calls vibecheck_scan("/path/to/project/backend")]
         [95] analytics_service.py — complex async DB ops, critical path
         [75] quiz_engine.py — external service dependency
+
+You: Generate a self-brief for my codebase
+Claude: [calls vibecheck_self_brief("/path/to/project")]
+        Architecture: FastAPI backend with async SQLAlchemy, React frontend...
+        Non-obvious conventions:
+          - All DB writes go through services/, never directly in routers/
+          - ...
+        Suggested sub-agents:
+          - db-agent: knows the async SQLAlchemy patterns and cascade rules
+          - api-contracts-agent: knows all Pydantic schemas and endpoint contracts
+
+You: Apply that brief to my CLAUDE.md
+Claude: [calls vibecheck_apply_brief("/path/to/project/CLAUDE.md", "/path/to/project")]
+        Brief appended to CLAUDE.md (3 sections, 2 sub-agent blocks)
 ```
 
 ---
@@ -146,7 +165,7 @@ Automatically saves every Claude Code session to VibeCheck when it ends. No manu
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /path/to/vibecoding/hooks/session_end.py"
+            "command": "python3 /path/to/vibecheck/hooks/session_end.py"
           }
         ]
       }
@@ -155,7 +174,7 @@ Automatically saves every Claude Code session to VibeCheck when it ends. No manu
 }
 ```
 
-Replace `/path/to/vibecoding` with your actual path. Restart Claude Code after adding.
+Replace `/path/to/vibecheck` with your actual path. Restart Claude Code after adding.
 
 **Behaviour:**
 - Fires at the end of every Claude Code session with 4+ turns
@@ -195,6 +214,30 @@ On any session detail page → **Extract Insights**. Takes ~5–10s. Shows:
 2. Files ranked by comprehension risk (0–100), with specific risk factors and blast radius
 3. Pin any file as a Focus Area — persisted, highlighted in future scans
 4. **Quiz me on this** on any file → generates a quiz from the code itself
+
+### AI Self-Brief
+**Self-Brief** (`/self-brief`) — lets Claude study your codebase so it can work in it more intelligently:
+1. Enter an absolute directory path → Generate Brief
+2. AI reads the 15 highest-risk files (first 800 chars each) and produces:
+   - **Architecture summary** — how the pieces connect
+   - **Non-obvious conventions** — implicit rules ALL code follows
+   - **Critical invariants** — assumptions the code relies on that cause subtle bugs if violated
+   - **Common AI mistakes to avoid** — specific gotchas for this codebase
+   - **Key entry points** — the 3–6 most important files and their exact roles
+3. **Suggested sub-agents** — 3–5 domain specialists (e.g. `db-agent`, `api-contracts-agent`) with ready-to-paste CLAUDE.md system prompt blocks
+4. **Apply to CLAUDE.md** — paste your CLAUDE.md path and append the full brief in one click
+
+The brief is designed to be pasted into CLAUDE.md so every future Claude Code session in that project starts with this context already loaded.
+
+### Multi-Repo Analysis
+**Multi-Repo** (`/multi-repo`) — for systems that span multiple repositories:
+1. Create a group by naming it and adding repo paths with roles (e.g. `api-service`, `frontend`, `shared-lib`)
+2. **Analyze** — AI scans all repos and identifies cross-repo connections:
+   - API calls between services
+   - Shared type definitions
+   - Package dependencies
+   - Event producers/consumers
+3. Results surface which repos call each other and why — useful context when making a change that touches multiple repos
 
 ---
 
@@ -256,16 +299,17 @@ No other files need changing.
 ## Project structure
 
 ```
-vibecoding/
+vibecheck/
 ├── .env                              # Secrets (not committed)
 ├── .env.example
+├── CLAUDE.md                         # Project instructions for Claude Code
 ├── VIBECHECK.md                      # Architecture decisions + gotchas
 ├── backend/
 │   ├── main.py                       # FastAPI entrypoint
 │   ├── db.py                         # Async SQLAlchemy setup
-│   ├── mcp_server.py                 # MCP server (8 tools)
+│   ├── mcp_server.py                 # MCP server (11 tools)
 │   ├── pyproject.toml
-│   ├── models/session.py             # Session, Quiz, Attempt, Insight, FocusArea
+│   ├── models/session.py             # Session, Quiz, Attempt, Insight, FocusArea, RepoGroup, Repo, RepoConnection
 │   ├── schemas/session.py            # All Pydantic schemas
 │   ├── routers/
 │   │   ├── sessions.py
@@ -273,13 +317,16 @@ vibecoding/
 │   │   ├── results.py
 │   │   ├── insights.py
 │   │   ├── analytics.py
-│   │   └── codebase.py
+│   │   ├── codebase.py               # Scan, quiz, self-brief, focus areas
+│   │   └── multi_repo.py             # Repo group CRUD + cross-repo analysis
 │   └── services/
-│       ├── claude_service.py         # Quiz gen + answer evaluation (OpenAI)
+│       ├── claude_service.py         # Quiz gen + answer evaluation + self-brief (OpenAI)
 │       ├── quiz_engine.py            # Orchestrates DB + AI for quizzes
 │       ├── insights_service.py       # Session intelligence extraction
 │       ├── analytics_service.py      # Cross-session topic scoring + catch-up
-│       └── codebase_service.py       # Directory scanning + code-first quiz gen
+│       ├── codebase_service.py       # Directory scanning + code-first quiz gen
+│       ├── self_brief_service.py     # AI codebase onboarding brief generation
+│       └── multi_repo_service.py     # Cross-repo connection analysis
 ├── frontend/
 │   ├── src/
 │   │   ├── api/sessions.ts           # All typed API wrappers
@@ -291,7 +338,11 @@ vibecoding/
 │   │       ├── Results.tsx
 │   │       ├── Insights.tsx
 │   │       ├── Analytics.tsx
-│   │       └── CodebaseMap.tsx
+│   │       ├── CodebaseMap.tsx
+│   │       ├── SelfBrief.tsx         # AI codebase onboarding brief UI
+│   │       ├── SelfBriefComponents.tsx
+│   │       ├── MultiRepo.tsx         # Multi-repo group manager UI
+│   │       └── MultiRepoComponents.tsx
 │   └── package.json
 └── hooks/
     └── session_end.py                # Claude Code Stop hook
@@ -329,8 +380,19 @@ POST   /api/analytics/catchup
 POST   /api/codebase/scan
 POST   /api/codebase/quiz
 
+# AI Self-Brief
+POST   /api/codebase/brief
+POST   /api/codebase/brief/apply
+
 # Focus Areas
 GET    /api/focus
 POST   /api/focus
 DELETE /api/focus/{id}
+
+# Multi-Repo
+GET    /api/repos/groups
+POST   /api/repos/groups
+GET    /api/repos/groups/{id}
+POST   /api/repos/groups/{id}/analyze
+GET    /api/repos/groups/{id}/context
 ```
