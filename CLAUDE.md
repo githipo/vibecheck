@@ -75,14 +75,14 @@ vibecheck/
 ├── VIBECHECK.md             # Architecture decisions + gotchas (living doc)
 ├── .env.example
 ├── hooks/
-│   └── session_end.py       # Claude Code Stop hook (auto-captures sessions)
+│   └── session_end.py       # Claude Code Stop hook (auto-captures + runs health)
 ├── backend/
 │   ├── main.py              # FastAPI app entrypoint
 │   ├── db.py                # DB init and session dependency
-│   ├── mcp_server.py        # MCP server — 8 tools for Claude Code
+│   ├── mcp_server.py        # MCP server — 13 tools for Claude Code
 │   ├── pyproject.toml
 │   ├── models/
-│   │   └── session.py       # Session, Quiz, Attempt, Insight, FocusArea
+│   │   └── session.py       # Session, Quiz, Attempt, Insight, FocusArea, RepoGroup, Repo, RepoConnection, SessionHealth, SessionHandoff
 │   ├── schemas/
 │   │   └── session.py       # All Pydantic request/response schemas
 │   ├── routers/
@@ -91,13 +91,20 @@ vibecheck/
 │   │   ├── results.py       # Attempt submission + results
 │   │   ├── insights.py      # Session intelligence extraction
 │   │   ├── analytics.py     # Cross-session analytics + catch-up
-│   │   └── codebase.py      # Directory scan + code-first quiz
+│   │   ├── codebase.py      # Directory scan + code-first quiz + self-brief
+│   │   ├── health.py        # Context rot analysis (POST generate / GET fetch)
+│   │   ├── handoff.py       # Handoff doc (POST generate / GET fetch / POST apply)
+│   │   └── multi_repo.py    # Repo group CRUD + cross-repo analysis
 │   └── services/
-│       ├── claude_service.py    # AI provider calls (quiz gen + evaluation)
+│       ├── claude_service.py    # All AI provider calls (quiz, eval, insights, health, handoff, brief)
 │       ├── quiz_engine.py       # Orchestrates DB + AI for quizzes
 │       ├── insights_service.py  # Session intelligence extraction
 │       ├── analytics_service.py # Cross-session topic scoring + catch-up
-│       └── codebase_service.py  # Directory scanning + code-first quiz gen
+│       ├── codebase_service.py  # Directory scanning + code-first quiz gen
+│       ├── self_brief_service.py    # AI codebase onboarding brief
+│       ├── context_rot_service.py   # Context health analysis + persistence
+│       ├── handoff_service.py       # Handoff doc generation + persistence
+│       └── multi_repo_service.py    # Cross-repo connection analysis
 └── frontend/
     ├── src/
     │   ├── api/sessions.ts  # All typed API fetch wrappers
@@ -107,9 +114,14 @@ vibecheck/
     │       ├── SessionDetail.tsx
     │       ├── Quiz.tsx
     │       ├── Results.tsx
-    │       ├── Insights.tsx      # Session intelligence + CLAUDE.md apply
-    │       ├── Analytics.tsx     # Comprehension dashboard + catch-up briefs
-    │       └── CodebaseMap.tsx   # Codebase scanner + focus areas
+    │       ├── Insights.tsx         # Session intelligence + CLAUDE.md apply
+    │       ├── Analytics.tsx        # Comprehension dashboard + catch-up briefs
+    │       ├── CodebaseMap.tsx      # Codebase scanner + focus areas
+    │       ├── SelfBrief.tsx        # AI codebase brief + CLAUDE.md apply
+    │       ├── SelfBriefComponents.tsx
+    │       ├── MultiRepo.tsx        # Multi-repo group manager
+    │       ├── MultiRepoComponents.tsx
+    │       └── SessionHealth.tsx    # Context rot report + handoff generation
     ├── index.html
     ├── vite.config.ts
     └── package.json
@@ -126,6 +138,8 @@ vibecheck/
 | `Attempt` | session_id, quiz_id, answers (JSON), evaluations (JSON), score, feedback_summary |
 | `Insight` | session_id, decisions/patterns/gotchas/proposed_rules (all JSON) |
 | `FocusArea` | type (file/concept), value, label |
+| `SessionHealth` | session_id, efficiency_score, lazy_prompt_count, estimated_wasted_token_ratio, lazy_prompts (JSON), breakpoints (JSON), summary |
+| `SessionHandoff` | session_id, content (text), word_count |
 
 ---
 
@@ -151,6 +165,15 @@ POST   /api/sessions/{id}/insights   # Extract decisions/patterns/gotchas (AI)
 GET    /api/sessions/{id}/insights
 POST   /api/sessions/{id}/insights/apply  # Write to a CLAUDE.md file
 
+# Context Health
+POST   /api/sessions/{id}/health     # Analyze for context rot (AI) — 409 if exists
+GET    /api/sessions/{id}/health     # Fetch cached health report
+
+# Session Handoff
+POST   /api/sessions/{id}/handoff    # Generate compact handoff doc (AI) — 409 if exists
+GET    /api/sessions/{id}/handoff    # Fetch cached handoff doc
+POST   /api/sessions/{id}/handoff/apply  # Write handoff to a file (overwrites)
+
 # Analytics
 GET    /api/analytics                # Cross-session topic scores + blind spots
 POST   /api/analytics/catchup        # Generate personalized catch-up brief (AI)
@@ -158,11 +181,20 @@ POST   /api/analytics/catchup        # Generate personalized catch-up brief (AI)
 # Codebase
 POST   /api/codebase/scan            # Scan directory for comprehension risk (AI)
 POST   /api/codebase/quiz            # Generate quiz from a code file (AI)
+POST   /api/codebase/brief           # AI onboarding brief for a directory
+POST   /api/codebase/brief/apply     # Append brief to a CLAUDE.md file
 
 # Focus Areas
 GET    /api/focus
 POST   /api/focus
 DELETE /api/focus/{id}
+
+# Multi-Repo
+GET    /api/repos/groups
+POST   /api/repos/groups
+GET    /api/repos/groups/{id}
+POST   /api/repos/groups/{id}/analyze
+GET    /api/repos/groups/{id}/context
 ```
 
 ---
@@ -171,12 +203,15 @@ DELETE /api/focus/{id}
 
 1. **Home** (`/`) — Session list + nav to Analytics and Codebase Map
 2. **New Session** (`/sessions/new`) — Paste transcript, select source type
-3. **Session Detail** (`/sessions/:id`) — Transcript, quiz actions, insights trigger
+3. **Session Detail** (`/sessions/:id`) — Transcript, quiz actions, insights trigger, context health button
 4. **Quiz** (`/sessions/:id/quiz`) — Step-through question interface
 5. **Results** (`/sessions/:id/results`) — Score, per-answer feedback, retry
 6. **Insights** (`/sessions/:id/insights`) — Decisions, patterns, gotchas, CLAUDE.md apply
-7. **Analytics** (`/analytics`) — Topic scores, blind spots, catch-up briefs
-8. **Codebase Map** (`/codebase`) — Directory scanner, focus areas, code-first quiz
+7. **Session Health** (`/sessions/:id/health`) — Context rot report + handoff generation
+8. **Analytics** (`/analytics`) — Topic scores, blind spots, catch-up briefs
+9. **Codebase Map** (`/codebase`) — Directory scanner, focus areas, code-first quiz
+10. **Self-Brief** (`/self-brief`) — AI codebase onboarding brief + CLAUDE.md apply
+11. **Multi-Repo** (`/multi-repo`) — Repo group manager + cross-repo connection analysis
 
 ---
 
@@ -192,6 +227,11 @@ DELETE /api/focus/{id}
 | `vibecheck_catchup` | Personalized catch-up brief for a weak topic |
 | `vibecheck_scan` | Scan directory for comprehension risk |
 | `vibecheck_code_quiz` | Generate quiz from a code file |
+| `vibecheck_self_brief` | AI codebase onboarding brief with sub-agent suggestions |
+| `vibecheck_apply_brief` | Append self-brief to a CLAUDE.md file |
+| `vibecheck_repo_context` | Cross-repo connection context for a named repo group |
+| `vibecheck_health` | Analyze session for context rot — efficiency score, lazy prompts, breakpoints |
+| `vibecheck_handoff` | Generate <500-word handoff doc for fresh-session continuity |
 
 ---
 

@@ -16,6 +16,8 @@ A learning-verification companion for AI-assisted development. VibeCheck watches
 | **Code-First Quizzing** | Generate a quiz from a source file with no transcript needed |
 | **AI Self-Brief** | Points Claude at your codebase → AI reads the riskiest files → generates a CLAUDE.md-ready onboarding brief with architecture notes, conventions, invariants, and suggested sub-agents |
 | **Multi-Repo Analysis** | Group multiple repos → AI maps cross-repo connections (API calls, shared types, package deps) → surfaces context for working across a system |
+| **Context Health** | Analyze any session for context rot — lazy/vague prompts, token inflation, efficiency score, and where you should have started a fresh session |
+| **Session Handoff** | Compress a long session into a <500-word context doc you can paste as the first message in a new Claude Code session — same context, zero re-read cost |
 
 All features are available in the browser and via **MCP tools** directly inside Claude Code.
 
@@ -111,6 +113,8 @@ Restart Claude Code after registering.
 | `vibecheck_self_brief` | Scan a directory → AI reads the highest-risk files → returns an onboarding brief (architecture, conventions, invariants, mistakes to avoid) plus 3–5 suggested sub-agents with ready-to-paste CLAUDE.md blocks. |
 | `vibecheck_apply_brief` | Same as `vibecheck_self_brief` but appends the full brief directly to a specified CLAUDE.md file. |
 | `vibecheck_repo_context` | Given a named repo group, return cross-repo connection context — which repos call each other, share types, or depend on each other. |
+| `vibecheck_health` | Analyze a session for context rot — returns efficiency score, lazy prompt list with rewrites, wasted token ratio, and suggested fresh-start breakpoints. |
+| `vibecheck_handoff` | Compress a session transcript into a <500-word handoff doc for starting a fresh Claude Code session with full context. |
 
 **Example Claude Code conversations:**
 
@@ -146,6 +150,17 @@ Claude: [calls vibecheck_self_brief("/path/to/project")]
 You: Apply that brief to my CLAUDE.md
 Claude: [calls vibecheck_apply_brief("/path/to/project/CLAUDE.md", "/path/to/project")]
         Brief appended to CLAUDE.md (3 sections, 2 sub-agent blocks)
+
+You: Check the health of this session
+Claude: [calls vibecheck_health(session_id)]
+        Efficiency: 62/100
+        Lazy prompts: 4 ("fix it", "make it better", "now do the same for X", ...)
+        Wasted token ratio: 31% — repetitive context re-explanation
+        Recommended breakpoint: after message 14 (authentication flow complete)
+
+You: Give me a handoff doc for this session
+Claude: [calls vibecheck_handoff(session_id)]
+        Handoff ready (487 words). Paste as your first message in the next session.
 ```
 
 ---
@@ -180,6 +195,7 @@ Replace `/path/to/vibecheck` with your actual path. Restart Claude Code after ad
 - Fires at the end of every Claude Code session with 4+ turns
 - Silently skips short or trivial sessions
 - POSTs the transcript to your local backend
+- Automatically runs a context health analysis on the captured session
 - Opens your browser to the session detail page
 - Does nothing if the backend isn't running — never interrupts Claude Code
 
@@ -228,6 +244,24 @@ On any session detail page → **Extract Insights**. Takes ~5–10s. Shows:
 4. **Apply to CLAUDE.md** — paste your CLAUDE.md path and append the full brief in one click
 
 The brief is designed to be pasted into CLAUDE.md so every future Claude Code session in that project starts with this context already loaded.
+
+### Context Health
+On any session detail page → **Context Health**. Takes ~5–10s. Shows:
+- **Efficiency score** (0–100) — overall signal-to-noise rating for the session
+- **Lazy prompts** — each vague message flagged with a rewritten, more explicit version
+- **Wasted token ratio** — estimated proportion of the session wasted on re-explanation and context drift
+- **Recommended breakpoints** — messages where you should have started a fresh session to avoid rot
+
+Use `vibecheck_health(session_id)` in Claude Code to get the same analysis mid-session.
+
+### Session Handoff
+On any session detail page → **Generate Handoff**. Compresses the full transcript into a <500-word context document:
+- What was built and why
+- Key decisions made
+- Open threads / next steps
+- Current state of the codebase / conversation
+
+Paste it as the first message in a new Claude Code session to continue with full context and zero re-read overhead. You can also write it directly to a file (e.g. `HANDOFF.md`) from the UI.
 
 ### Multi-Repo Analysis
 **Multi-Repo** (`/multi-repo`) — for systems that span multiple repositories:
@@ -307,9 +341,9 @@ vibecheck/
 ├── backend/
 │   ├── main.py                       # FastAPI entrypoint
 │   ├── db.py                         # Async SQLAlchemy setup
-│   ├── mcp_server.py                 # MCP server (11 tools)
+│   ├── mcp_server.py                 # MCP server (13 tools)
 │   ├── pyproject.toml
-│   ├── models/session.py             # Session, Quiz, Attempt, Insight, FocusArea, RepoGroup, Repo, RepoConnection
+│   ├── models/session.py             # Session, Quiz, Attempt, Insight, FocusArea, RepoGroup, Repo, RepoConnection, SessionHealth, SessionHandoff
 │   ├── schemas/session.py            # All Pydantic schemas
 │   ├── routers/
 │   │   ├── sessions.py
@@ -318,14 +352,18 @@ vibecheck/
 │   │   ├── insights.py
 │   │   ├── analytics.py
 │   │   ├── codebase.py               # Scan, quiz, self-brief, focus areas
+│   │   ├── health.py                 # Context rot analysis (POST/GET)
+│   │   ├── handoff.py                # Handoff doc generation + apply (POST/GET/POST)
 │   │   └── multi_repo.py             # Repo group CRUD + cross-repo analysis
 │   └── services/
-│       ├── claude_service.py         # Quiz gen + answer evaluation + self-brief (OpenAI)
+│       ├── claude_service.py         # All AI provider calls (quiz, eval, self-brief, health, handoff)
 │       ├── quiz_engine.py            # Orchestrates DB + AI for quizzes
 │       ├── insights_service.py       # Session intelligence extraction
 │       ├── analytics_service.py      # Cross-session topic scoring + catch-up
 │       ├── codebase_service.py       # Directory scanning + code-first quiz gen
 │       ├── self_brief_service.py     # AI codebase onboarding brief generation
+│       ├── context_rot_service.py    # Context health analysis + persistence
+│       ├── handoff_service.py        # Handoff doc generation + persistence
 │       └── multi_repo_service.py     # Cross-repo connection analysis
 ├── frontend/
 │   ├── src/
@@ -342,7 +380,8 @@ vibecheck/
 │   │       ├── SelfBrief.tsx         # AI codebase onboarding brief UI
 │   │       ├── SelfBriefComponents.tsx
 │   │       ├── MultiRepo.tsx         # Multi-repo group manager UI
-│   │       └── MultiRepoComponents.tsx
+│   │       ├── MultiRepoComponents.tsx
+│   │       └── SessionHealth.tsx     # Context rot analysis + handoff generation
 │   └── package.json
 └── hooks/
     └── session_end.py                # Claude Code Stop hook
@@ -395,4 +434,13 @@ POST   /api/repos/groups
 GET    /api/repos/groups/{id}
 POST   /api/repos/groups/{id}/analyze
 GET    /api/repos/groups/{id}/context
+
+# Context Health
+POST   /api/sessions/{id}/health      # Analyze for context rot (AI)
+GET    /api/sessions/{id}/health
+
+# Session Handoff
+POST   /api/sessions/{id}/handoff     # Generate compact handoff doc (AI)
+GET    /api/sessions/{id}/handoff
+POST   /api/sessions/{id}/handoff/apply  # Write handoff to a file
 ```

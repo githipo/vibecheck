@@ -14,16 +14,21 @@ Living document. Updated as the project evolves. Tracks decisions, patterns, got
 | `Attempt` | User's answers + AI evaluations + score |
 | `Insight` | Extracted decisions/patterns/gotchas from a Session transcript |
 | `FocusArea` | User-pinned files or concepts, used to weight scans and analytics |
+| `SessionHealth` | Context rot analysis — efficiency score, lazy prompts list, wasted token ratio, recommended breakpoints |
+| `SessionHandoff` | Compressed session context doc (<500 words) for fresh-start handoffs |
 
 ### API surface
 ```
-/api/sessions             CRUD
-/api/sessions/{id}/quiz   generate + fetch
+/api/sessions                          CRUD
+/api/sessions/{id}/quiz                generate + fetch
 /api/sessions/{id}/attempt + /results
 /api/sessions/{id}/insights + /insights/apply
-/api/analytics            + /analytics/catchup
-/api/codebase/scan        + /codebase/quiz
-/api/focus                CRUD
+/api/sessions/{id}/health              context rot analysis (POST generates, GET fetches cached)
+/api/sessions/{id}/handoff             handoff doc (POST generates, GET fetches, POST /apply writes to file)
+/api/analytics                         + /analytics/catchup
+/api/codebase/scan + /codebase/quiz + /codebase/brief + /codebase/brief/apply
+/api/focus                             CRUD
+/api/repos/groups                      CRUD + /analyze + /context
 ```
 
 ### Frontend pages
@@ -35,10 +40,13 @@ Living document. Updated as the project evolves. Tracks decisions, patterns, got
 | `/sessions/:id/quiz` | Step-through quiz |
 | `/sessions/:id/results` | Score + feedback |
 | `/sessions/:id/insights` | Decisions/patterns/gotchas + CLAUDE.md apply |
+| `/sessions/:id/health` | Context rot report + handoff generation |
 | `/analytics` | Comprehension dashboard + blind spots + catch-up briefs |
 | `/codebase` | Codebase scanner + focus areas + code-first quiz trigger |
+| `/self-brief` | AI codebase onboarding brief + CLAUDE.md apply |
+| `/multi-repo` | Multi-repo group manager + cross-repo analysis |
 
-### MCP tools (available in all Claude Code sessions)
+### MCP tools (available in all Claude Code sessions) — 13 total
 | Tool | What it does |
 |---|---|
 | `vibecheck_capture` | Package current session → create + quiz |
@@ -49,6 +57,11 @@ Living document. Updated as the project evolves. Tracks decisions, patterns, got
 | `vibecheck_catchup` | Personalized catch-up brief for a weak topic |
 | `vibecheck_scan` | Scan directory for comprehension risk |
 | `vibecheck_code_quiz` | Generate quiz from a code file |
+| `vibecheck_self_brief` | AI codebase onboarding brief with sub-agent suggestions |
+| `vibecheck_apply_brief` | Write self-brief directly to a CLAUDE.md file |
+| `vibecheck_repo_context` | Cross-repo connection context for a named group |
+| `vibecheck_health` | Analyze session for context rot — efficiency score, lazy prompts, breakpoints |
+| `vibecheck_handoff` | Generate <500-word handoff doc for fresh-session continuity |
 
 ---
 
@@ -59,6 +72,15 @@ Switched from Anthropic SDK at setup time — account had no credits. All AI log
 
 ### Code-first quizzing reuses Session/Quiz/Attempt pipeline
 Rather than a separate quiz type, code-file sessions use `source_type = "code_file"` and store file contents as the transcript. This means the full quiz/attempt/results flow works unchanged — only the generation step differs (reads a file instead of a conversation).
+
+### Context health and handoff results are persisted (unlike scan results)
+Both `SessionHealth` and `SessionHandoff` are stored in the DB after first generation. Subsequent calls use GET to retrieve the cached version — POST returns 409 if the record already exists. This mirrors the `Insight` pattern. Rationale: these are expensive AI calls and the results are deterministic for a given transcript; re-generating adds cost with no benefit.
+
+### Handoff word count is stored for quick UI display
+`SessionHandoff.word_count` is computed and stored at generation time (`len(content.split())`). The target is <500 words; the AI is prompted to stay within that budget but the backend does not enforce it — the stored count is informational.
+
+### Stop hook auto-runs health analysis
+`hooks/session_end.py` fires `POST /api/sessions/{id}/health` after capturing a session. This means every auto-captured session gets a health report automatically, without the user having to click anything. If the backend is down or the call fails, the hook continues silently.
 
 ### Analytics topic clustering is computed, not stored
 Topic labels are generated per-request via a batch OpenAI call. Not stored in DB. This keeps the schema simple at the cost of a ~2s overhead on the analytics endpoint. If this becomes slow, the classification should be cached.
@@ -91,6 +113,8 @@ The MCP server (`backend/mcp_server.py`) only makes HTTP calls to the local Fast
 - **`analytics_service.py` recomputes topic classification on every call** — if a user has many sessions with many questions, this gets slow. Watch this.
 - **File path validation in `/insights/apply`** — must be absolute, must exist, must end in `.md`. The backend writes directly to disk; no undo.
 - **`source_type = "code_file"` sessions** have file contents as transcript — can be large. No truncation at the session level, but quiz generation truncates to 4000 chars.
+- **Health/handoff are one-shot per session** — POST returns 409 if already generated, GET retrieves the cached result. There is no way to regenerate without deleting the DB row directly. This is intentional (idempotent AI calls).
+- **Handoff `/apply` overwrites the target file** — it does a full write, not an append. Suitable for `HANDOFF.md` but use caution if writing to `CLAUDE.md`.
 
 ---
 
@@ -98,6 +122,7 @@ The MCP server (`backend/mcp_server.py`) only makes HTTP calls to the local Fast
 - No auth — single user, no accounts
 - No git integration — codebase scanner doesn't know which files Claude touched vs. which were pre-existing
 - Analytics topic classification not cached — will slow down with scale
-- No way to retake a quiz and compare scores over time for the same session
 - No way to retake a quiz and compare scores over time for the same session (retake works but scores aren't diff'd)
 - Codebase scan results not persisted — no historical risk trend across scans
+- No way to regenerate health or handoff without deleting the DB row — by design, but could add a `?force=true` flag
+- Health analysis quality depends on transcript format — works best with Claude Code transcripts (tool calls + turns clearly delineated)
