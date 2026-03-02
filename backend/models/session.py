@@ -37,6 +37,12 @@ class Session(Base):
     insight: Mapped[Optional["Insight"]] = relationship(
         "Insight", back_populates="session", uselist=False, cascade="all, delete-orphan"
     )
+    health: Mapped[Optional["SessionHealth"]] = relationship(
+        "SessionHealth", back_populates="session", uselist=False, cascade="all, delete-orphan"
+    )
+    handoff: Mapped[Optional["SessionHandoff"]] = relationship(
+        "SessionHandoff", back_populates="session", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class Quiz(Base):
@@ -95,6 +101,44 @@ class Insight(Base):
     )
 
     session: Mapped["Session"] = relationship("Session", back_populates="insight")
+
+
+class SessionHealth(Base):
+    __tablename__ = "session_health"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    total_messages: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_messages: Mapped[int] = mapped_column(Integer, nullable=False)
+    lazy_prompt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    efficiency_score: Mapped[float] = mapped_column(Float, nullable=False)
+    estimated_wasted_token_ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    lazy_prompts: Mapped[list] = mapped_column(JSON, nullable=False)
+    breakpoints: Mapped[list] = mapped_column(JSON, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    session: Mapped["Session"] = relationship("Session", back_populates="health")
+
+
+class SessionHandoff(Base):
+    __tablename__ = "session_handoffs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)   # markdown handoff doc
+    word_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    session: Mapped["Session"] = relationship("Session", back_populates="handoff")
 
 
 class FocusArea(Base):

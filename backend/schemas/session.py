@@ -161,6 +161,59 @@ class CatchupOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Session Health / Context Rot schemas
+# ---------------------------------------------------------------------------
+
+
+class LazyPrompt(BaseModel):
+    text: str
+    position: int              # 1-indexed message number in conversation
+    reason: str                # why this wastes tokens
+    suggested_rewrite: str     # specific, actionable alternative
+
+
+class ContextBreakpoint(BaseModel):
+    message_num: int
+    reason: str                # why this was a good stopping point
+    context: str               # what was happening at this moment
+
+
+class SessionHealthOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    session_id: int
+    total_messages: int
+    user_messages: int
+    lazy_prompt_count: int
+    efficiency_score: float    # 0–100
+    estimated_wasted_token_ratio: float  # 0.0–1.0 approximation
+    lazy_prompts: list[LazyPrompt]
+    breakpoints: list[ContextBreakpoint]
+    summary: str
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Session Handoff schemas
+# ---------------------------------------------------------------------------
+
+
+class SessionHandoffOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    session_id: int
+    content: str        # markdown handoff document, ready to paste
+    word_count: int
+    created_at: datetime
+
+
+class HandoffApplyRequest(BaseModel):
+    file_path: str      # absolute path to write handoff to (any .md file)
+
+
+# ---------------------------------------------------------------------------
 # Codebase Intelligence schemas
 # ---------------------------------------------------------------------------
 

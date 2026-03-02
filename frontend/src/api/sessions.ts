@@ -291,6 +291,83 @@ export const startCodeQuiz = async (filePath: string, title?: string): Promise<S
   return handleResponse<Session>(res)
 }
 
+// Session Handoff types and API calls
+
+export interface SessionHandoff {
+  id: number
+  session_id: number
+  content: string      // markdown document, ready to paste
+  word_count: number
+  created_at: string
+}
+
+export const generateHandoff = async (sessionId: number): Promise<SessionHandoff> => {
+  const res = await fetch(`/api/sessions/${sessionId}/handoff`, { method: 'POST' })
+  if (res.status === 409) {
+    return getHandoff(sessionId)
+  }
+  return handleResponse<SessionHandoff>(res)
+}
+
+export const getHandoff = async (sessionId: number): Promise<SessionHandoff> => {
+  const res = await fetch(`/api/sessions/${sessionId}/handoff`)
+  return handleResponse<SessionHandoff>(res)
+}
+
+export const applyHandoff = async (
+  sessionId: number,
+  filePath: string
+): Promise<{ applied: boolean; file_path: string; word_count: number }> => {
+  const res = await fetch(`/api/sessions/${sessionId}/handoff/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_path: filePath }),
+  })
+  return handleResponse<{ applied: boolean; file_path: string; word_count: number }>(res)
+}
+
+// Session Health / Context Rot types and API calls
+
+export interface LazyPrompt {
+  text: string
+  position: number
+  reason: string
+  suggested_rewrite: string
+}
+
+export interface ContextBreakpoint {
+  message_num: number
+  reason: string
+  context: string
+}
+
+export interface SessionHealth {
+  id: number
+  session_id: number
+  total_messages: number
+  user_messages: number
+  lazy_prompt_count: number
+  efficiency_score: number
+  estimated_wasted_token_ratio: number
+  lazy_prompts: LazyPrompt[]
+  breakpoints: ContextBreakpoint[]
+  summary: string
+  created_at: string
+}
+
+export const analyzeSessionHealth = async (sessionId: number): Promise<SessionHealth> => {
+  const res = await fetch(`/api/sessions/${sessionId}/health`, { method: 'POST' })
+  if (res.status === 409) {
+    return getSessionHealth(sessionId)
+  }
+  return handleResponse<SessionHealth>(res)
+}
+
+export const getSessionHealth = async (sessionId: number): Promise<SessionHealth> => {
+  const res = await fetch(`/api/sessions/${sessionId}/health`)
+  return handleResponse<SessionHealth>(res)
+}
+
 // AI Self-Brief types and API calls
 
 export interface KeyEntryPoint {

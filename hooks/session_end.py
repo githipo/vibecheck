@@ -3,6 +3,11 @@
 VibeCheck Stop hook — automatically captures Claude Code sessions.
 Receives session data as JSON on stdin (Claude Code Stop event).
 Silently no-ops if VibeCheck backend is not running.
+
+On session end:
+  1. Creates a VibeCheck session from the transcript
+  2. Fires quiz + health analysis in the background (non-blocking)
+  3. Opens the health page in the browser — auto-analysis runs there
 """
 
 import json
@@ -71,6 +76,22 @@ def build_title() -> str:
     return f"{dirname} — {date_str}"
 
 
+def _post_background(url: str, body: bytes = b"{}") -> None:
+    """Fire a POST request in a background subprocess (non-blocking)."""
+    subprocess.Popen(
+        [
+            "curl", "-s", "-o", "/dev/null",
+            "-X", "POST",
+            "-H", "Content-Type: application/json",
+            "-d", body.decode(),
+            "--max-time", "60",
+            url,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def main() -> None:
     # Step 1: Read and parse JSON from stdin
     try:
@@ -104,7 +125,7 @@ def main() -> None:
 
     # Steps 6-8: POST to VibeCheck API and open browser — wrapped in silent try/except
     try:
-        # POST session to VibeCheck
+        # Create session (synchronous — we need the session ID)
         request_payload = json.dumps({
             "title": title,
             "transcript": transcript_text,
@@ -122,8 +143,20 @@ def main() -> None:
             session = json.loads(resp.read())
             session_id = session["id"]
 
-        # Open browser to session detail page
-        subprocess.Popen(["open", f"http://localhost:5173/sessions/{session_id}"])
+        # Fire quiz generation in background (non-blocking)
+        _post_background(
+            f"http://localhost:8000/api/sessions/{session_id}/quiz",
+            b"{}",
+        )
+
+        # Fire health analysis in background (non-blocking)
+        # The health page will auto-poll and show results when ready
+        _post_background(
+            f"http://localhost:8000/api/sessions/{session_id}/health",
+        )
+
+        # Open directly to the health page — it auto-shows analysis + handoff
+        subprocess.Popen(["open", f"http://localhost:5173/sessions/{session_id}/health"])
 
     except Exception:
         pass

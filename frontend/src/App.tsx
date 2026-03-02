@@ -9,6 +9,7 @@ import Analytics from './pages/Analytics'
 import CodebaseMap from './pages/CodebaseMap'
 import SelfBrief from './pages/SelfBrief'
 import MultiRepo from './pages/MultiRepo'
+import SessionHealth from './pages/SessionHealth'
 
 const App = () => {
   return (
@@ -20,6 +21,7 @@ const App = () => {
         <Route path="/sessions/:id/quiz" element={<Quiz />} />
         <Route path="/sessions/:id/results" element={<Results />} />
         <Route path="/sessions/:id/insights" element={<Insights />} />
+        <Route path="/sessions/:id/health" element={<SessionHealth />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/codebase" element={<CodebaseMap />} />
         <Route path="/codebase/brief" element={<SelfBrief />} />

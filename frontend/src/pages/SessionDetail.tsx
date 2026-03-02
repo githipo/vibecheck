@@ -233,6 +233,13 @@ const SessionDetail = () => {
             </button>
           )}
 
+          <Link
+            to={`/sessions/${sessionId}/health`}
+            className="inline-flex items-center gap-2 border border-orange-500/60 text-orange-400 hover:bg-orange-500/10 font-medium px-4 py-2 rounded-lg transition-colors text-sm"
+          >
+            Context Health
+          </Link>
+
           <button
             onClick={handleDelete}
             disabled={deleting}

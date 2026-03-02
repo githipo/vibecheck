@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -23,28 +24,91 @@ async def vibecheck_capture(
     transcript: str,
     source_type: str = "claude_code",
 ) -> str:
-    """Capture this AI coding session in VibeCheck and generate a comprehension quiz. Call this when the user asks to be quizzed on what was just built. Provide the session title and a full plain-text transcript of what was discussed and built."""
+    """Capture this AI coding session in VibeCheck. Automatically generates a comprehension quiz, analyzes context health for lazy prompts and token waste, and if rot is detected prepares a fresh-start handoff document — all in one call. Provide the session title and a full plain-text transcript of what was discussed and built."""
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            # Step 1: Create session
             create_resp = await client.post(
                 f"{BASE_URL}/api/sessions",
                 json={"title": title, "transcript": transcript, "source_type": source_type},
             )
             create_resp.raise_for_status()
-            session = create_resp.json()
-            session_id: int = session["id"]
+            session_id: int = create_resp.json()["id"]
 
-            quiz_resp = await client.post(
-                f"{BASE_URL}/api/sessions/{session_id}/quiz",
-                json={},
+            # Step 2: Quiz + health analysis in parallel
+            quiz_resp, health_resp = await asyncio.gather(
+                client.post(f"{BASE_URL}/api/sessions/{session_id}/quiz", json={}),
+                client.post(f"{BASE_URL}/api/sessions/{session_id}/health"),
+                return_exceptions=True,
             )
-            quiz_resp.raise_for_status()
 
-        return (
-            f"Quiz ready! Open http://localhost:5173/sessions/{session_id}/quiz to take it.\n\n"
-            f"Session title: {title}\n"
-            f"Session ID: {session_id}"
-        )
+            # Parse health result
+            health_data: dict = {}
+            if not isinstance(health_resp, Exception):
+                try:
+                    health_resp.raise_for_status()
+                    health_data = health_resp.json()
+                except Exception:
+                    pass
+
+            efficiency: float = health_data.get("efficiency_score", 100.0)
+            lazy_count: int = health_data.get("lazy_prompt_count", 0)
+            user_messages: int = health_data.get("user_messages", 0)
+            wasted_pct: int = round(health_data.get("estimated_wasted_token_ratio", 0) * 100)
+
+            # Step 3: Auto-generate handoff if rot is significant
+            handoff_content: str | None = None
+            if health_data and efficiency < 70:
+                try:
+                    handoff_resp = await client.post(
+                        f"{BASE_URL}/api/sessions/{session_id}/handoff"
+                    )
+                    if handoff_resp.status_code in (200, 201):
+                        handoff_content = handoff_resp.json().get("content", "")
+                except Exception:
+                    pass
+
+        # Build output
+        lines: list[str] = [f"Session captured: {title}", f"ID: {session_id}", ""]
+
+        # Quiz line
+        lines.append(f"QUIZ  http://localhost:5173/sessions/{session_id}/quiz")
+        lines.append("")
+
+        # Health section
+        if health_data:
+            eff_rounded = round(efficiency)
+            if efficiency >= 80:
+                lines.append(f"CONTEXT HEALTH  {eff_rounded}/100  [HEALTHY]")
+                lines.append("Prompts were specific. Good habits.")
+            elif efficiency >= 60:
+                lazy_pct = round(lazy_count / user_messages * 100) if user_messages else 0
+                lines.append(f"CONTEXT HEALTH  {eff_rounded}/100  [MODERATE ROT]")
+                lines.append(
+                    f"{lazy_count}/{user_messages} prompts vague ({lazy_pct}%) "
+                    f"— ~{wasted_pct}% tokens wasted on re-reads"
+                )
+                lines.append(f"Details: http://localhost:5173/sessions/{session_id}/health")
+            else:
+                lazy_pct = round(lazy_count / user_messages * 100) if user_messages else 0
+                lines.append(f"CONTEXT HEALTH  {eff_rounded}/100  [HEAVY ROT]")
+                lines.append(
+                    f"{lazy_count}/{user_messages} prompts vague ({lazy_pct}%) "
+                    f"— ~{wasted_pct}% tokens wasted on re-reads"
+                )
+                if handoff_content:
+                    lines += [
+                        "",
+                        "FRESH-START HANDOFF — paste as first message in your next session:",
+                        "─" * 55,
+                        handoff_content,
+                        "─" * 55,
+                        f"Full report: http://localhost:5173/sessions/{session_id}/health",
+                    ]
+                else:
+                    lines.append(f"Handoff + details: http://localhost:5173/sessions/{session_id}/health")
+
+        return "\n".join(lines)
     except httpx.HTTPError as exc:
         logger.error("HTTP error during vibecheck_capture: %s", exc)
         return f"Could not reach the VibeCheck API. Is the backend running at {BASE_URL}? (Error: {exc})"
@@ -532,6 +596,148 @@ async def vibecheck_apply_brief(claude_md_path: str, directory: str) -> str:
             "Unexpected error during vibecheck_apply_brief for %s: %s", claude_md_path, exc
         )
         return f"An unexpected error occurred while applying brief to '{claude_md_path}': {exc}"
+
+
+@mcp.tool()
+async def vibecheck_handoff(session_id: int) -> str:
+    """
+    Generate a fresh-start handoff document for a VibeCheck session.
+    Compresses the session transcript into a <500-word context doc that you can paste as the first message in a new Claude Code session — same context, zero re-read cost from the old conversation.
+    Use this when a session is getting long and expensive to break the context rot cycle.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            post_resp = await client.post(
+                f"{BASE_URL}/api/sessions/{session_id}/handoff",
+            )
+
+            if post_resp.status_code == 409:
+                get_resp = await client.get(
+                    f"{BASE_URL}/api/sessions/{session_id}/handoff"
+                )
+                get_resp.raise_for_status()
+                data: dict = get_resp.json()
+            else:
+                post_resp.raise_for_status()
+                data = post_resp.json()
+
+        content: str = data.get("content", "")
+        word_count: int = data.get("word_count", 0)
+
+        lines = [
+            f"FRESH-START HANDOFF — Session #{session_id}",
+            f"({word_count} words — paste this as the first message in your new session)",
+            "",
+            "─" * 60,
+            "",
+            content,
+            "",
+            "─" * 60,
+            "",
+            "To use: start a new Claude Code session and paste the above as your opening message.",
+            f"Full UI: http://localhost:5173/sessions/{session_id}/health",
+        ]
+
+        return "\n".join(lines)
+    except httpx.HTTPError as exc:
+        logger.error(
+            "HTTP error during vibecheck_handoff for session %d: %s", session_id, exc
+        )
+        return f"Could not reach the VibeCheck API. Is the backend running at {BASE_URL}? (Error: {exc})"
+    except Exception as exc:
+        logger.error(
+            "Unexpected error during vibecheck_handoff for session %d: %s", session_id, exc
+        )
+        return f"An unexpected error occurred while generating handoff for session {session_id}: {exc}"
+
+
+@mcp.tool()
+async def vibecheck_health(session_id: int) -> str:
+    """
+    Analyze a VibeCheck session for context rot — lazy prompts, token inflation, and recommended breakpoints.
+    Returns an efficiency score, a list of vague prompts with better rewrites, and where you should have started a fresh session.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            post_resp = await client.post(
+                f"{BASE_URL}/api/sessions/{session_id}/health",
+            )
+
+            if post_resp.status_code == 409:
+                get_resp = await client.get(
+                    f"{BASE_URL}/api/sessions/{session_id}/health"
+                )
+                get_resp.raise_for_status()
+                data: dict = get_resp.json()
+            else:
+                post_resp.raise_for_status()
+                data = post_resp.json()
+
+        efficiency = round(data.get("efficiency_score", 0))
+        lazy_count = data.get("lazy_prompt_count", 0)
+        user_messages = data.get("user_messages", 0)
+        total_messages = data.get("total_messages", 0)
+        wasted_pct = round(data.get("estimated_wasted_token_ratio", 0) * 100)
+        summary: str = data.get("summary", "")
+        lazy_prompts: list[dict] = data.get("lazy_prompts", [])
+        breakpoints: list[dict] = data.get("breakpoints", [])
+
+        if efficiency >= 80:
+            health_label = "HEALTHY"
+        elif efficiency >= 60:
+            health_label = "MODERATE ROT"
+        else:
+            health_label = "HEAVY ROT"
+
+        lines = [
+            f"CONTEXT HEALTH REPORT — Session #{session_id}",
+            "",
+            f"Efficiency:    {efficiency}/100  [{health_label}]",
+            f"Lazy prompts:  {lazy_count} of {user_messages} user messages ({round(lazy_count / user_messages * 100) if user_messages else 0}%)",
+            f"Total turns:   {total_messages}",
+            f"Token waste:   ~{wasted_pct}% (est. — re-reads driven by vague prompts)",
+            "",
+            "SUMMARY",
+            summary,
+        ]
+
+        if lazy_prompts:
+            lines += ["", f"LAZY PROMPTS ({lazy_count})"]
+            for p in lazy_prompts[:5]:
+                text = p.get("text", "")
+                pos = p.get("position", "?")
+                rewrite = p.get("suggested_rewrite", "")
+                lines.append(f"  msg #{pos}  \"{text}\"")
+                lines.append(f"         → \"{rewrite}\"")
+            if lazy_count > 5:
+                lines.append(f"  ... and {lazy_count - 5} more. See full report in the UI.")
+
+        if breakpoints:
+            lines += ["", "RECOMMENDED BREAKPOINTS (start fresh here next time)"]
+            for bp in breakpoints:
+                msg_num = bp.get("message_num", "?")
+                reason = bp.get("reason", "")
+                ctx = bp.get("context", "")
+                lines.append(f"  msg #{msg_num}: {reason}")
+                if ctx:
+                    lines.append(f"           {ctx}")
+
+        lines += [
+            "",
+            f"Full report: http://localhost:5173/sessions/{session_id}/health",
+        ]
+
+        return "\n".join(lines)
+    except httpx.HTTPError as exc:
+        logger.error(
+            "HTTP error during vibecheck_health for session %d: %s", session_id, exc
+        )
+        return f"Could not reach the VibeCheck API. Is the backend running at {BASE_URL}? (Error: {exc})"
+    except Exception as exc:
+        logger.error(
+            "Unexpected error during vibecheck_health for session %d: %s", session_id, exc
+        )
+        return f"An unexpected error occurred while analyzing health for session {session_id}: {exc}"
 
 
 @mcp.tool()
